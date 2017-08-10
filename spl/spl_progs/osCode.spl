@@ -1,0 +1,33 @@
+load(7,1);//loading the exception handler
+load(8,2);
+
+load(23,17);//loading the interrupt 7 Routine
+load(24,18);
+
+[READY_LIST + 0*32] = 0; // Sets the entry for PID as 0
+
+load(25,21);// loading init program to memory
+load(26,22);
+load(27,23);
+
+PTBR = PAGE_TABLE + 0*8;
+PTLR = 4;
+
+[PTBR + 0] = 25;  // Setting up of the Page Table  
+[PTBR + 1] = "01";    // for the init process
+[PTBR + 2] = 26;	// reference and valid/invalid bit	
+[PTBR + 3] = "01"; // is also set
+[PTBR + 4] = 27;
+[PTBR + 5] = "01";
+[PTBR + 6] = 28;
+[PTBR + 7] = "01";
+
+[READY_LIST + 0*32 + 1] = 2; // sets the entry for the STATE of as ruuning
+
+breakpoint;
+SP = 3*512; // this is logical address as it works in user mode
+			// physical = (3*512)/512 -> 28  so, physical = 28*512
+[28*512] = 0;   // Set up the IP value for INIT in the stack
+
+breakpoint;
+ireturn;
