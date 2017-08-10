@@ -36,4 +36,8 @@ SP = 3*512; // this is logical address as it works in user mode
 
 load(11,5);
 load(12,6);
+
+load(9,3);
+load(10,4);
+
 ireturn;
