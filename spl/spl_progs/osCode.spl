@@ -1,6 +1,9 @@
 load(7,1);//loading the exception handler
 load(8,2);
 
+
+
+
 load(23,17);//loading the interrupt 7 Routine
 load(24,18);
 
@@ -24,10 +27,13 @@ PTLR = 4;
 
 [READY_LIST + 0*32 + 1] = 2; // sets the entry for the STATE of as ruuning
 
-breakpoint;
+//breakpoint;
 SP = 3*512; // this is logical address as it works in user mode
 			// physical = (3*512)/512 -> 28  so, physical = 28*512
 [28*512] = 0;   // Set up the IP value for INIT in the stack
 
-breakpoint;
+// breakpoint;
+
+load(11,5);
+load(12,6);
 ireturn;
