@@ -1,0 +1,140 @@
+load (5,19); 	// *Load FAT from disk to Memory
+load (6,20); 	// *Load Disk Free List From Memory
+
+load (7,1); 	//The exception handler
+load (8,2); 	//from 1,2 blocks to pages 7,8
+
+load (9,3); 	//The Timer int handler
+load (10,4); 	//from 3,4 blocks to pages 9,10
+
+load (11,5); 	// The interrupt 1 routine
+load (12,6); 	// from 5,6 blocks to pages 11,12
+
+load (13,7); 	// The interrupt 2 routine
+load (14,8); 	// from 7,8 blocks to pages 13,14
+
+load (15,9); 	// The interrupt 3 routine
+load (16,10); 	// from 9,10 blocks to pages 15,16
+
+load (17,11); 	// The interrupt 4 routine
+load (18,12); 	// from 11,12 blocks to pages 17,18
+
+load (19,13); 	// The interrupt 5 routine
+load (20,14); 	// from 13,14 blocks to pages 19,20
+
+load (21,15); 	// The interrupt 6 routine
+load (22,16); 	// from 15,16 blocks to pages 21,22
+
+load (23,17); 	// The interrupt 7 routine
+load (24,18); 	// from 17,18 blocks to pages 23,24
+
+//######### S E T T I N G - U P - S Y S T E M - W I D E - F I L E - T A B L E #############
+
+alias counter S0;
+counter = 0;
+while (counter < 128) do
+	[FILE_TABLE + counter] = -1;		//File location on FAT TABLE
+	[FILE_TABLE + counter + 1] = 0; 	//Count for open instances of the file is 0.
+	counter = counter + 2;
+endwhile;
+
+//########################## S E T T I N G - U P - F I F O ################################
+
+counter = 0;
+while (counter < 8) do
+	[1472 + counter] = -1;				//FIFO location is set as 1472 (unallocated region) in Memory
+	counter = counter + 1;
+endwhile;
+
+//################## S E T T I N G - U P - M E M - F R E E - L I S T ######################
+
+counter = 0;
+while (counter <= 25) do
+	[MEM_LIST + counter] = 1;			//File location on MEM_LIST
+	counter = counter + 1;				//Memory List is set for all "OS pages + INIT pages"!!!
+endwhile;
+										//Till 25 is USED as INIT stack is loaded
+while (counter < 64) do
+	[MEM_LIST + counter] = 0;			//File location on MEM_LIST
+	counter = counter + 1;				//Memory List is set for all "OS pages + INIT pages"!!!
+endwhile;
+										// Stack For Init is in 28th page
+
+//##################### S E T T I N G - U P - P C B - S T A T E S #########################
+
+counter = 0;
+while (counter < 32) do				//32 PCBs
+	[READY_LIST + counter*32 + 1] = 0;		
+	counter = counter + 1;			//set as terminated
+endwhile;
+
+alias i S1;
+i =0;
+counter =0;
+while (counter <32) do
+	i = 15;
+	while (i<32) do
+		[READY_LIST + 32*counter + i] = -1;
+		//[READY_LIST + 32*counter + i + 1] = 0;
+		i = i + 1;
+	endwhile;
+	
+	counter = counter + 1;
+endwhile;
+
+
+//##################### S E T T I N G - D I S K - F R E E - L I S T ######################
+counter = 448;			//SWAP BLOCKS ARE UNSET
+while (counter < 512) do
+	[DISK_LIST + counter] = 0;
+	counter = counter + 1;
+endwhile;
+
+store (6,20);			//store it back to disk. So that the swap blocks can be reused
+
+//######################## L O A D I N G - P R O C E S S E S ##############################	
+
+//load (25,21);		// Not required as Demand Paging is implemented.
+//load (26,22); 	// load init from (21,22,23) blocks										
+//load (27,23); 	// to (25,26,27) pages
+
+
+
+//##################################### I N I T ###########################################
+
+[READY_LIST	+ 0*32] = 0; 	// Finding PCB from ready list and assigning PID = 0
+
+PTBR = PAGE_TABLE + 0*8;	//setting PTBR to correct location on page table
+PTLR = 4; 					// each process 4 pages										//
+		
+							// The pages need not be loaded directly.
+							// Exception Handler will load it. (Pure Demand Paging)
+[PTBR + 0] = 21;   			//Setting the Page Tabele Entry For The process
+[PTBR + 1] = "00"; 			// ->"" So that '0' is not truncated						// P A G E  - T A B L E - S E T U P
+[PTBR + 2] = 22;																					
+[PTBR + 3] = "00";  		// reference bit-> 0
+[PTBR + 4] = 23;			// valid/invalid bit-> 1
+[PTBR + 5] = "00";			// For each entry in table
+[PTBR + 6] = 25; 
+[PTBR + 7] = "01";			// page 28 -> STACK (Stack should be initialised) To Come back to user mode IRET causes to pop from the stack
+							// and exception hanlder is not invoked in Kernel
+																					// P. C. B  - S E T U P
+[READY_LIST + 0*32 + 1] = 2;//Setting Process State (in 2nd bit in PCB) as 2 (Runing)
+[READY_LIST + 0*32 + 31] = 0;//Setting Parent of INIT as INIT itself
+
+counter=15;
+while (counter < 31) do
+	[READY_LIST + 32*counter] = -1;
+	counter = counter + 1;
+endwhile;
+
+//#########################################################################################
+
+SP = 3 * 512; 	// This is the Logical Address (as is used in USER MODE after IRET)
+				// Physical  == [(3* 512) / 512 ] -> 28 (from page table above (PTBR + 2*3))
+
+[25 * 512] = 0; // Physical location of stack is used to set value for SP in our process
+				// so that IRET will change to USER MODE and then stack is popped
+				// then logical 0 is loaded to IP ,after logical translation of SP.
+
+ireturn;

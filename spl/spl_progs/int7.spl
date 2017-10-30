@@ -1,0 +1,238 @@
+alias physicalSP S0;
+physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+
+alias sysCallNo S1;
+sysCallNo = [physicalSP - 1];
+
+alias currPID S2;
+currPID = (PTBR - PAGE_TABLE) / 8;
+
+
+alias currPCB S3;
+currPCB = READY_LIST + 32 * currPID;		//------ E X I T ----------------------
+	
+alias newPID S4;
+alias newPCB S5;
+
+alias fileTableIndex S6;
+
+alias waitingPID S7;
+
+
+alias i S15;
+
+
+alias j S14;
+j = 0;
+
+alias flag S13;
+flag = 0;
+
+alias currstack S12;
+currstack = [PTBR + 6];
+
+
+if (sysCallNo == 14) then                 // S I G N A L
+	
+	i =0;
+
+	while (i < 32) do
+		if([READY_LIST + 32*i + 1] == currPID + 100) then
+			[READY_LIST + 32*i + 1] = 1;
+		endif;
+
+		i = i+1;
+	endwhile;
+
+	[physicalSP - 2] = 0;
+	ireturn;
+
+endif;				// Done
+
+
+if (sysCallNo == 13) then               // W A I T
+	
+	waitingPID = [physicalSP - 3];
+	i = [READY_LIST + 32 * waitingPID + 1];
+
+	if (i == 2 || i == 0) then		//not terminated or running
+		[physicalSP - 2] = -1;
+		print("WaitErr1");
+		ireturn;
+	endif;
+
+	[ currPCB + 1 ] = 100 + waitingPID;		// make current process wait for PID process
+	[ currPCB + 2 ] = BP;
+	[ currPCB + 3 ] = SP - 1;
+	[ currPCB + 4 ] = [ physicalSP ]; 
+
+	[ currPCB + 5 ] = PTBR;
+	[ currPCB + 6 ] = PTLR;
+	
+	[ currPCB + 7 ] = R0; 
+	[ currPCB + 8 ] = R1; 
+	[ currPCB + 9 ] = R2; 
+	[ currPCB + 10 ] = R3; 
+	[ currPCB + 11 ] = R4; 
+	[ currPCB + 12 ] = R5; 
+	[ currPCB + 13 ] = R6; 
+	[ currPCB + 14 ] = R7;
+
+endif;
+			
+
+if (sysCallNo == 10) then               //E X I T// signal all the waiting processess if current process exits
+	
+	i =0;
+
+	while (i < 32) do
+		if([READY_LIST + 32*i + 1] == currPID + 100) then
+			[READY_LIST + 32*i + 1] = 1;	// when exit, make all waiting processess ready
+		endif;
+
+		i = i+1;
+	endwhile;
+
+endif;
+
+
+
+	newPID = currPID;
+	i = 0;
+
+	while (i < 32) do
+		newPID = newPID + 1;
+		if(newPID == 32) then
+			newPID = 0;
+		endif;
+	
+		newPCB = READY_LIST + 32 * newPID;
+		if( [newPCB + 1] == 1) then 
+			flag = 1;
+			break;
+		endif;
+
+		i = i+1;
+	
+	endwhile;
+
+	//breakpoint;
+
+	if (flag == 0) then
+		print "Last exit";
+		halt;
+	endif;
+
+
+if (sysCallNo == 10) then			//close open files, free pages used by Exitin gprocess
+ 	i = 0;
+
+	while (i < 8) do
+
+		fileTableIndex = currPCB + 15 + 2*i;
+
+		if ([fileTableIndex] != -1) then
+
+			j = FILE_TABLE + 2 * [fileTableIndex] + 1;  // decrementing file count
+			[j] = [j] - 1;
+
+			if ([j] == 0) then                     // if file open count is 0 entry is invalid
+				[j - 1] = -1;
+			endif;
+
+			[fileTableIndex] = -1;
+			[fileTableIndex + 1] = -1;
+		endif;
+
+	    i = i+1;
+
+	endwhile;
+
+	//breakpoint;
+
+	[currPCB + 1] = 0;                             // current process is terminated
+
+
+
+	i = 0;
+	
+	while (i < 6) do                            // Freeing pages used by old process
+
+		j = i + 1;
+
+		if ([PTBR + j] == "01" || [PTBR + j] == "11") then            // if a valid page
+	
+			[MEM_LIST + [PTBR + i]] = [MEM_LIST + [PTBR + i]] - 1;     //decrementing MEM_LIST value
+	
+		else
+			if ([PTBR + i] >= 448) then                                    //if in swap area
+				[DISK_LIST + [PTBR + i]] = [DISK_LIST + [PTBR + i]] - 1;   //decrementing DISK_LIST value
+			endif;
+
+		endif;
+
+		i = i + 2;
+
+	endwhile;
+
+	store (6,20);                               //committing back DF list
+
+	[MEM_LIST + [PTBR + 6]] = [MEM_LIST + [PTBR + 6]] - 1;    // freeing the stack page
+	[PTBR + 6] = -1;
+	[PTBR + 7] = "00";	
+
+
+endif;
+
+	//breakpoint;
+	// Stack repacement
+	if ([ [newPCB + 5] + 7] == "00") then  //if new process stack not in memory swap with current process stack
+
+		load (currstack,[ [newPCB + 5] + 6]);			//new process stack in Surrstakc position
+		[DISK_LIST + [[newPCB + 5] + 6]] = 0;	//stack page of old process in disk made 0, ie disk FREE
+	
+		//i = 0;
+		//while ( i < 512) do	
+		//	[ currstack*512 + i] = [SCRATCHPAD + i];
+		//	i = i+1;	
+		//endwhile;
+	
+		[PTBR + 6] = [[newPCB + 5] + 6];
+		[PTBR + 7] = "00";
+		[MEM_LIST + currstack] = 1;
+	
+		[[newPCB + 5] + 6] = currstack;
+		[[newPCB + 5] + 7] = "01";
+	
+		store (6,20);                               //committing back disk free list
+	
+
+	endif;
+
+
+	R0 = [newPCB + 7];
+	R1 = [newPCB + 8];
+	R2 = [newPCB + 9];
+	R3 = [newPCB + 10];
+	R4 = [newPCB + 11];
+	R5 = [newPCB + 12];
+	R6 = [newPCB + 13];
+	R7 = [newPCB + 14];
+	
+	BP = [newPCB + 2];
+	SP = [newPCB + 3];
+	
+	PTBR = [newPCB + 5];
+	PTLR = [newPCB + 6];
+
+	SP = SP + 1;
+	
+	alias newphysicalSP S10;
+	newphysicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+	[ newphysicalSP ] = [ newPCB + 4 ];
+	
+	[newPCB + 1] = 2;                    //set the process as running
+
+	//breakpoint;
+	
+	ireturn;
