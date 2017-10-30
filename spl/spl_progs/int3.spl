@@ -1,0 +1,226 @@
+alias physicalSP S0;
+physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+
+alias sysCallNo S1;
+sysCallNo = [physicalSP - 1]; 		//System call No is just Below the IP on the stack, as INT will save IP on TOP.
+
+if (sysCallNo == 6) then 		// 	S E E K --------------------------------------------------------------------------------------------------------
+	alias newLseek S2;
+	alias fileDescriptor S3;
+	alias currentPCB S4;
+	alias fileTableIndex S5;
+	alias fatIndex S6;
+	alias fileSize S7;
+
+	newLseek = [physicalSP -3];				    //S T A C K
+	fileDescriptor = [physicalSP -4];			//||Arg2||
+												//||Arg1||
+
+	if (0>fileDescriptor || fileDescriptor>7) then 	
+		[physicalSP -2] = -1;					//invalid fileDescriptor
+		print("SekFDscEr");
+		ireturn;
+	endif;
+
+	currentPCB = READY_LIST + ((PTBR - PAGE_TABLE) / 8 ) * 32; // PID = ((PTBR - PAGE_TABLE) / 8 )
+
+	fileTableIndex = [currentPCB + 15 + fileDescriptor*2];
+
+	if (fileTableIndex == -1) then	
+		[physicalSP -2] = -1;					//invalid Index in PCB per process file table
+		print("SekFtiErr");
+		ireturn;
+	endif;
+
+	fatIndex = [FILE_TABLE + fileTableIndex*2];	//Find Fat index from System Wide Open File Table
+
+	fileSize = [FAT + fatIndex*8 + 1]; 			//file size 
+
+	if (0 > newLseek || newLseek > fileSize) then
+		[physicalSP -2] = -1;					//invalid Index in LSeek size. The maximum permissible value = filesize
+		print("SekINVlSe");
+		ireturn;
+	endif;
+
+	[currentPCB + 15 + fileDescriptor*2 + 1] = newLseek;
+	[physicalSP -2] =0;
+	ireturn;
+endif;
+
+if (sysCallNo == 7) then		// R E A D ------------------------------------------------------------------------------------------------------------
+	alias wordRead S2;
+	alias fileDescriptor S3;
+	alias currentPCB S4;
+	alias fileTableIndex S5;
+	alias LSeek S6;
+	alias fatIndex S7;
+	alias dataBlock S8;
+	alias i S9;
+
+	wordRead = [physicalSP -3]; 		//write the word read to this Location
+	fileDescriptor = [physicalSP -4];
+
+	if ((fileDescriptor !=-3 && fileDescriptor < 0) && fileDescriptor > 7) then 	
+		[physicalSP -2] = -1;					//invalid fileDescriptor
+		//print("ReaFDscEr");
+		ireturn;
+	endif;
+
+	currentPCB = READY_LIST + ((PTBR - PAGE_TABLE) / 8 ) * 32; // PID = ((PTBR - PAGE_TABLE) / 8 )
+
+	if (fileDescriptor == -3) then									//FIFO PART
+		alias currentPID S10;
+		alias currentPCB S11;
+		alias j S12;
+		alias pageNum S13;
+		alias counter S14;
+		alias newPCB S15;
+
+		i = 0;
+		if([1472] == -1) then
+			//print("Re!FlFif");				// Now to make the process wait- schedule another process after making current process state as 50----------------------
+
+				currentPID = (PTBR - 1024) / 8; 
+				currentPCB = READY_LIST + currentPID * 32;
+
+				[currentPCB + 1] = 50; //waiting for write -> state 50
+				[currentPCB + 2] = BP;
+				[currentPCB + 3] = SP-1;
+
+				[currentPCB + 4] = [physicalSP]-2;	//make the instruction execute again 
+				[currentPCB + 5] = PTBR;
+				[currentPCB + 6] = PTLR;
+
+				[currentPCB + 7] = R0;
+				[currentPCB + 8] = R1;
+				[currentPCB + 9] = R2;
+				[currentPCB + 10] = R3;
+				[currentPCB + 11] = R4;	
+				[currentPCB + 12] = R5;
+				[currentPCB + 13] = R6;
+				[currentPCB + 14] = R7;
+
+				j = PTBR;
+				pageNum = [PTBR + 6];
+
+				counter = 1;
+				while (counter <= 32) do 
+					if( [READY_LIST + ((currentPID + counter) % 32) * 32 + 1 ] == 1) then
+						newPCB = (READY_LIST + ((currentPID + counter) % 32) * 32);
+						break;
+					endif;
+					counter = counter + 1;
+				endwhile;
+				if (counter == 33) then
+					//	print("NoPrsLeft");
+					halt;
+				endif;
+
+				BP = [newPCB + 2];	 
+				SP = [newPCB + 3]; 
+				PTBR = [newPCB + 5];
+				PTLR = [newPCB + 6];
+
+				R0 = [newPCB + 7];
+				R1 = [newPCB + 8];
+				R2 = [newPCB + 9];
+				R3 = [newPCB + 10];
+				R4 = [newPCB + 11];
+				R5 = [newPCB + 12];
+				R6 = [newPCB + 13];
+				R7 = [newPCB + 14];
+
+				if([PTBR + 6] >= 448) then
+					load(1,[PTBR + 6]);
+					store(pageNum,[PTBR + 6]);
+					i = 0;
+					while(i < 512) do
+						[pageNum*512 + i] = [512 + i];
+						i = i + 1;
+					endwhile;
+					[j + 6] = [PTBR + 6];
+					[j + 7] = "00";
+					[PTBR + 6] = pageNum;
+					[MEM_LIST + pageNum] = 1;
+					[PTBR + 7] = "11";
+					store(6,20);
+				endif;		
+
+				SP = SP +1; 
+
+				physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+				[physicalSP] = [newPCB + 4];
+
+				[newPCB + 1] = 2; 
+
+				ireturn;
+				
+		else
+			physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+
+			[physicalSP -2] = 0; 			//success
+			[physicalSP-3] 	=[1472];		//file First in queue
+
+			i=0;
+			while(i<7) do 
+				[1472 + i] = [1472 + i + 1];	//push up the rest
+				i = i + 1;
+			endwhile;
+			[1472 + 7] = -1;
+
+											//search all process and make the first Write Waiting Process Continue
+
+			counter = 1;
+				while (counter <= 32) do 
+					if( [READY_LIST + ((currentPID + counter) % 32) * 32 + 1 ] == 60) then		//waiting for read -> state 60
+						[READY_LIST + ((currentPID + counter) % 32) * 32 + 1 ] = 1;
+						break;
+					endif;
+					counter = counter + 1;
+				endwhile;
+
+			ireturn;
+		endif;
+
+	endif;
+
+
+
+	fileTableIndex = [currentPCB + 15 + fileDescriptor*2];
+
+	if (fileTableIndex == -1) then	
+		[physicalSP -2] = -1;					//invalid Index in PCB per process file table
+		//print("ReaFtiErr");
+		ireturn;
+	endif;
+
+	LSeek = [currentPCB + 15 + fileDescriptor*2 + 1];
+
+	fatIndex = [FILE_TABLE + fileTableIndex*2];
+
+	load (1, [FAT + fatIndex*8 + 2]); //load BASIC BLOCK from FAT entry to SCRATCHPAD
+
+	if (LSeek == [FAT + fatIndex*8 +1]) then
+		[physicalSP -2] = -1;					//EOF reached, hence no more words to be read
+		//print("Read!EOF");
+		ireturn;
+	endif;
+
+	dataBlock = [SCRATCHPAD + (LSeek / 512)];
+
+	if ( dataBlock == -1) then
+		[physicalSP -2] = -1;					//Invalid DATA Block 
+		//print("ReaInvDbl");
+		ireturn;
+	endif;
+
+	load (1,dataBlock); //load dataBlock to SCRATCH_PAD
+
+	wordRead = [SCRATCHPAD + (LSeek % 512)];
+
+	[physicalSP-3] =wordRead;
+	[currentPCB + 15 + fileDescriptor*2 + 1] = [currentPCB + 15 + fileDescriptor*2 + 1] + 1;
+
+	[physicalSP -2] =0; //SUCCESS
+	ireturn;
+endif;

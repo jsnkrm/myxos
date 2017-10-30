@@ -1,0 +1,120 @@
+alias physicalSP S0;
+physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+
+alias sysCallNo S1;
+sysCallNo = [physicalSP - 1]; 		//System call No is just Below the IP on the stack, as INT will save IP on TOP.
+
+if (sysCallNo == 9) then			// E X E C
+	alias filename S2;
+	alias i S3;
+	alias basicBlock S4;
+	alias counter S5;
+	alias validPages S6;
+	alias k S7;
+	alias j S8;
+	alias currentPCB S9;
+	alias fileTableIndex S10;
+
+
+	filename = [physicalSP - 3];
+
+	i=0;
+	while (i<64) do 
+		if ([FAT + i*8] == filename	) then
+			break;										
+		endif;
+		i =i +1;
+	endwhile;
+
+	if (i == 64) then
+		print("ExecFlnEr");
+		[physicalSP - 2] = -1; 							//No File with such a name Exists
+		ireturn;
+	endif;
+
+	basicBlock = [FAT + i*8 + 2];
+
+	load (1,basicBlock); 								//Loading Basic Block in to Scratch Pad
+														//Stage 10 Changes
+
+	i=0;
+	while (i < 256) do
+		if ( [SCRATCHPAD + i] == -1 || [SCRATCHPAD + i] == "") then
+			break;
+		endif;
+		i = i + 1;
+	endwhile;		
+
+	if (i > 3)  then
+		breakpoint;				//3 since the loop should break at exaclty the first invalid code block which is at location 3
+		print("ExecMemEr");		//Process has excess Pages
+		[physicalSP -2] =-1;
+		ireturn;
+	endif;	
+
+	i=0;
+	counter = 0;										
+	while (i < 3) do
+		if([PTBR + i*2 + 1] == "01" || [PTBR + i*2 + 1] == "11") then	 // If the page is valid
+			[MEM_LIST + [PTBR + i*2] ] = [MEM_LIST + [PTBR + i*2] ] - 1; // For each valid page MEM LIST entry is decremented (Since a new process is goind to occupy this page)
+												 //Similar to copy on write
+		else	//Invalid
+			if ([PTBR + i*2] >= 448) then
+				[DISK_LIST + [PTBR + i*2] ] = [DISK_LIST + [PTBR + i*2] ] - 1;	//Shared swap page count is reduced as a new process is going to take its place
+				store (6,20);
+			endif;
+		endif;
+
+		[PTBR + 2*i] = [SCRATCHPAD + i];				//Setting the Page tables as The CodeBlocks
+		[PTBR + 2*i + 1] = "00";						//Setting as invalid (So as to load it in Exception handler)
+		i = i + 1;
+	endwhile;
+
+	
+	[PTBR + 7] = "01"; 									//Setting stack page as valid
+
+	currentPCB = READY_LIST + ((PTBR - 1024)/8)*32 ;
+	i =0 ;
+	while(i<8) do
+		fileTableIndex =[currentPCB + 15 + i*2];		//closing opened Files
+		if(fileTableIndex != -1) then	
+			[FILE_TABLE + fileTableIndex*2 + 1] = [FILE_TABLE + fileTableIndex*2 + 1] - 1;
+
+			if ([FILE_TABLE + fileTableIndex*2 + 1] == 0) then
+				[FILE_TABLE + fileTableIndex*2] = -1;
+			endif;
+
+			[currentPCB + 15 + i*2] = -1;
+			[currentPCB + 15 + i*2 + 1] = -1;
+		endif;
+
+		i = i + 1;
+	endwhile;
+
+
+	SP = 3 * 512;										//stack is initialised as its initial logical value
+	physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+
+	[physicalSP] = 0;									//setting IP value as 0 for New Process To begin excecution from the beginning;
+
+	
+	ireturn;
+
+	else 
+		if (sysCallNo == 11) then		//---------------------------G E T - P I D------------------------------------------------------------------------------------
+			alias PID S2;
+			PID = (PTBR - PAGE_TABLE)/8;
+			[physicalSP - 2] = PID;
+			ireturn;
+
+		else
+			if (sysCallNo == 12) then	//---------------------------G E T - P P I D------------------------------------------------------------------------------------
+				alias currentPCB S2;
+
+				currentPCB = READY_LIST + ((PTBR - PAGE_TABLE)/8)*32;
+
+				[physicalSP - 2] = [currentPCB + 31];	//the  of the PCB last bit is used to store PARENT PID
+				ireturn;
+			endif;
+		endif;		
+endif;

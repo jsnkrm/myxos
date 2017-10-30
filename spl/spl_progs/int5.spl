@@ -1,0 +1,213 @@
+alias physicalSP S0;
+physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+
+alias sysCallNo S1;
+sysCallNo = [physicalSP - 1]; 		//System call No is just Below the IP on the stack, as INT will save IP on TOP.
+
+if (sysCallNo == 8) then			// F O R K
+	alias childPID S2;
+	alias flag S3;
+	alias childPCB S4;
+	alias i S5;
+	alias k S6;
+	alias j S7;
+	alias childPTBR S8;
+	alias currentPCB S9;
+	alias childPhysicalSP S10;
+	alias pageIndex S11;
+	alias pageNum S12;
+	alias counter S13;
+
+	//print("In Fork");
+
+	
+
+
+	flag = 0;
+	childPID=0;
+	while (childPID < 32) do
+		if( [READY_LIST + childPID*32 + 1] == 0) then	
+			flag = 1; 				// Finding Free PCBs in terminated state
+			break;					// Found Free in childPID
+		endif;
+
+		childPID = childPID + 1;
+	endwhile;	
+
+	if (flag == 0) then
+		print("Frk~FrPCB");
+		[physicalSP - 2] = -1; 		//Failure!! NO FREE PCBs (Below Sys Call are the arguments)
+		ireturn;
+	endif;
+
+	childPCB = READY_LIST + childPID*32;
+	[childPCB + 0] = childPID; 		//Set the PID as childPID of Free PCB in Ready List (Standard in XOS)
+	
+
+									//Stage 10 Changes
+	i = 0;
+	flag = 0;	
+	while (i < 64) do
+		if ([MEM_LIST + i] == 0) then
+			[MEM_LIST + i] = 1;		//we use that free page for stack
+			flag = 1;				//Checking MEM LIST For 1 Free page to store Stack
+			break;					//Free page in i
+		endif;
+		i = i + 1;
+	endwhile;
+
+
+	if (flag == 0) then		//Failure!! NO FREE Space in Mem Free List For Child Stack
+
+		pageIndex = 0;	//scanning starts from 0
+		counter = 0;
+
+		while (1) do
+			//print("*");							//loop until it finds a  page to replace
+			if (counter == 256) then
+				[physicalSP - 2]=-1;
+				ireturn;
+			endif;
+
+			if (pageIndex >= 256) then
+				pageIndex=pageIndex-256;
+			endif;
+
+
+			if (PAGE_TABLE + pageIndex == PTBR + 6) then
+				pageIndex = pageIndex + 2; 			//skip stack pages as it cannot be considered for replacement
+				//print("^");
+				counter = counter + 1;
+				continue;			
+			endif;
+
+			if ([PAGE_TABLE + pageIndex + 1] == "01") then	//Valid Unreferenced. Meant For ReplaceMent
+				if ([MEM_LIST + [PAGE_TABLE + pageIndex] ] > 1) then
+					pageIndex = pageIndex + 2; //Skip page as page shared in another process
+					counter = counter + 1;
+					continue;
+				endif;
+
+						 //At this point we have found the page to replace in pageIndex
+
+				j = 448; //to find a free swap block in DFL in disk
+				while (j < 512) do
+					if([DISK_LIST + j] == 0) then
+						break;
+					endif;
+					j = j + 1;
+				endwhile;
+
+				if(j == 512) then		//No Free Space, Hence the process must be made to EXIT
+					print "FrkExit3";	
+					[physicalSP + 1] = 10;			//Pass the System Call No. For EXIT
+					SP = SP + 2;					//2 space. -> 1 for Sys Call No. 1 for IP on top of it.
+					inline "JMP 11776"; 			//Exit Interrupt Routine in 23rd page (23*512= 11776)
+				endif;
+
+				store([PAGE_TABLE + pageIndex],j); //store into the swap location found
+				[DISK_LIST + j] = 1;
+				store (6,20);
+
+				pageNum = [PAGE_TABLE + pageIndex];	  //pageNum is the page we want to load the page into
+				[MEM_LIST + pageNum]=1;
+				i = pageNum;						//free page stored to i
+
+				[PAGE_TABLE + pageIndex] = j;		  
+				[PAGE_TABLE + pageIndex + 1] = "00";  //Set as invalid. So that the exception will make it load into MEMORY next time
+
+				break;								 //Important to Break				
+			endif;
+
+			if ([PAGE_TABLE + pageIndex + 1] == "11") then
+				[PAGE_TABLE + pageIndex + 1] = "01"; 			  //Referenced is set as Unreferenced in Second Chance algorithm
+			endif;
+
+			pageIndex = pageIndex + 2;
+			counter = counter + 1;
+		endwhile;
+
+	endif;
+
+
+	j =0;
+	while (j < 512) do
+		[i * 512 + j] = [[PTBR + 3*2] * 512 + j];		//Copy contents of the Parent Stack to Child Stack Word By Word
+		j = j + 1;
+	endwhile;
+
+	childPTBR = PAGE_TABLE + childPID * 8; 				//PTBR = syswidepagetable + PID*8;
+	
+	[childPTBR + 2*3] = i;
+	[childPTBR + 2*3 + 1] = "01"; 						//Setting stack for child and setting As Valid Unreferenced
+	[MEM_LIST + i] = 1; 								//Setting allocated stack page as Used in Memory Free List
+
+
+
+	i=0;
+	while (i < 3) do
+		[childPTBR + 2*i] = [PTBR + i*2];				//copying all  from Page Table of the parents except the stack
+		[childPTBR + 2*i + 1] = [PTBR + i*2 + 1];
+
+		if([PTBR + i*2 + 1] == "01" || [PTBR + i*2 + 1] == "11") then	 // If the page is valid
+			[MEM_LIST + [PTBR + i*2] ] = [MEM_LIST + [PTBR + i*2] ] + 1; //indicate that the page shared by more than 1 process 
+		else															 //If the page Invalid
+			if ([PTBR + i*2] >= 448) then
+				[DISK_LIST + [PTBR + i*2] ] = [DISK_LIST + [PTBR + i*2] ] + 1;	//swap block is shared by more than 1 process
+				store (6,20);
+			endif;
+		endif;
+
+		i =i + 1;
+	endwhile;
+
+
+										// SETTING CHILD PCB	
+
+										//Except for IP SP and PTBR ,REST ARE THE SAME
+	[childPCB + 1] = 1;					//Set State as ready
+	[childPCB + 2] = BP;				//BP
+
+	[childPCB + 3] = SP - 1;			//SP-> Ip is stored in the current stack pointer top. This is not required in Child process as IRET returns control to parent and pops IP
+	[childPCB + 4] = [physicalSP]; 		//IP-> Setting IP as logical IP stored in the top of the stack by the parent
+	[childPCB + 5] = childPTBR; 		//PTBR-> Set PTBR for Child in its PCB	
+	
+	[childPCB + 6] = PTLR;				//PTLR
+	[childPCB + 7] = R0;				//R0 - R7
+	[childPCB + 8] = R1;				
+	[childPCB + 9] = R2;				
+	[childPCB + 10] = R3;				
+	[childPCB + 11] = R4;				
+	[childPCB + 12] = R5;				
+	[childPCB + 13] = R6;				
+	[childPCB + 14] = R7;				
+										// Setting Per Process File Table
+	i=0;
+	currentPCB = READY_LIST + ((PTBR - PAGE_TABLE) / 8 ) * 32; 			// PID = ((PTBR - PAGE_TABLE) / 8 )
+
+	while (i < 8) do
+		[childPCB + 15 + i*2] = [currentPCB + 15 + i*2]; 				//Copy all the open Files By the Process
+		[childPCB + 15 + i*2 + 1] = [currentPCB + 15 + i*2 + 1]; 		//Copy Seek Position
+
+		if([currentPCB + 15 + i*2] != -1) then
+			[FILE_TABLE + [currentPCB + 15 + i*2] * 2 + 1] = [FILE_TABLE + [currentPCB + 15 + i*2] * 2 + 1] + 1;
+		endif;
+
+		i = i + 1; 					//increase the File open count in the Sys Wide Open File Table
+	endwhile;
+
+
+
+
+	[physicalSP - 2] = childPID;	//parent return value id Childs PID
+	childPhysicalSP = ([childPTBR + 2 * ((SP-1) / 512)] * 512) + ((SP-1) % 512);
+	[childPhysicalSP - 1] = -2; 	//child has return value -2 (-1 because IP is not stored)
+
+	
+	ireturn;
+
+	else
+		print("FrkSysErr");
+		[physicalSP - 2] = -1;
+		ireturn;
+endif;

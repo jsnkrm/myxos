@@ -1,0 +1,217 @@
+
+alias physicalSP S0;
+physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+
+alias sysCallNo S1;
+sysCallNo = [physicalSP - 1]; 	//System call No is jus tBelow the IP on the stack, as INT will save IP on TOP.								       S T A C K
+
+if (sysCallNo == 5) then    	// W R I T E --------------------------------------------------------------------------------------------		       |
+	alias wordToWrite S2;					// Just below SystemCall No. is the space for Return value. The rest are Arguments						||Arg2||
+	wordToWrite = [physicalSP - 3];		// WORD to write 																							||Arg1||
+
+	alias fileDescriptor S3;				
+	fileDescriptor = [physicalSP - 4];  // File Descriptor 
+
+	alias currentPCB S4;
+	alias fileTableIndex S5;
+	alias i S8;
+	alias counter S12;
+
+	if(fileDescriptor < 0 || fileDescriptor > 7) then
+		[physicalSP -2] = -1; 			//Failure, Invalid fileDescriptor
+		print("WriFDscEr");
+		ireturn;
+	endif;
+
+	currentPCB = READY_LIST + ((PTBR - PAGE_TABLE) /8) * 32; // PID = (PTBR - PAGE_TABLE) /8)
+	
+	fileTableIndex = [currentPCB + 15 + fileDescriptor*2];
+
+
+	if (fileDescriptor == 3) then
+		alias currentPID S6;							//FIFO PART
+		alias j S7;
+		alias pageNum S9;
+		alias newPCB S10;
+
+		currentPID = (PTBR - PAGE_TABLE) / 8; 
+		currentPCB = READY_LIST + currentPID * 32;
+
+		i = 0;
+		while (i<8) do
+			if ([1472 + i] == -1) then
+				[1472 + i] = wordToWrite;		//complete
+				[physicalSP - 2] = 0;
+
+				counter = 1;										//make First processes waiting for write as running
+				while (counter <= 32) do 
+					if( [READY_LIST + ((currentPID + counter) % 32) * 32 + 1 ] == 50) then		//waiting for write -> state 50
+						[READY_LIST + ((currentPID + counter) % 32) * 32 + 1 ] = 1;
+						break;
+					endif;
+					counter = counter + 1;
+				endwhile;
+
+				ireturn;
+				break;
+			endif; 
+			i = i +1;
+		endwhile;
+
+		if (i==8) then						//no space in FIFO hence make the process wait
+
+					//print("wriErr3");
+					[currentPCB + 1] = 60; //waiting for read -> state 60
+					[currentPCB + 2] = BP;
+					[currentPCB + 3] = SP-1;
+
+					[currentPCB + 4] = [physicalSP]-2;	//make the instruction execute again
+					[currentPCB + 5] = PTBR;
+					[currentPCB + 6] = PTLR;
+
+					[currentPCB + 7] = R0;
+					[currentPCB + 8] = R1;
+					[currentPCB + 9] = R2;
+					[currentPCB + 10] = R3;
+					[currentPCB + 11] = R4;	
+					[currentPCB + 12] = R5;
+					[currentPCB + 13] = R6;
+					[currentPCB + 14] = R7;
+
+					j = PTBR;
+					pageNum = [PTBR + 6];
+
+					counter = 1;
+					while (counter <= 32) do 
+						if( [READY_LIST + ((currentPID + counter) % 32) * 32 + 1 ] == 1) then
+							newPCB = (READY_LIST + ((currentPID + counter) % 32) * 32);
+							break;
+						endif;
+						counter = counter + 1;
+					endwhile;
+
+					if (counter == 33) then
+					//	print("NoPrsLeft");
+					halt;
+					endif;
+
+					BP = [newPCB + 2];	 
+					SP = [newPCB + 3]; 
+					PTBR = [newPCB + 5];
+					PTLR = [newPCB + 6];
+
+					R0 = [newPCB + 7];
+					R1 = [newPCB + 8];
+					R2 = [newPCB + 9];
+					R3 = [newPCB + 10];
+					R4 = [newPCB + 11];
+					R5 = [newPCB + 12];
+					R6 = [newPCB + 13];
+					R7 = [newPCB + 14];
+
+					if([PTBR + 6] >= 448) then
+						load(1,[PTBR + 6]);
+						store(pageNum,[PTBR + 6]);
+						i = 0;
+						while(i < 512) do
+							[pageNum*512 + i] = [512 + i];
+							i = i + 1;
+						endwhile;
+						[j + 6] = [PTBR + 6];
+						[j + 7] = "00";
+						[PTBR + 6] = pageNum;
+						[MEM_LIST + pageNum] = 1;
+						[PTBR + 7] = "11";
+						store(6,20);
+					endif;		
+
+					SP = SP +1; 
+
+					physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+					[physicalSP] = [newPCB + 4];
+
+					[newPCB + 1] = 2; 
+
+					ireturn;	
+		endif;		
+	endif;
+
+
+
+	
+	alias seekPosition S6;
+	alias fatIndex S7;
+	alias flag S9;
+	alias dataBlockNO S10;
+	alias flag2 S11;
+	
+
+
+
+	seekPosition = [currentPCB + 15 + fileDescriptor*2 + 1]; //Find table index and seek position of open file from PCB
+
+	if (fileTableIndex == -1 || seekPosition == -1) then
+		[physicalSP -2] = -1; 			//Failure, Invalid File Table Index or Seek Position
+		print("WriFTIskp");
+		ireturn;
+	endif;
+	
+	fatIndex = [FILE_TABLE + fileTableIndex*2]; //Find Fat index from System Wide Open File Table
+
+	load(1, [FAT + fatIndex*8 + 2]); //load the BASIC BLOCK of the OPEN FILE to SCRATCHPAD
+
+	flag2 =0;
+	dataBlockNO = [SCRATCHPAD + (seekPosition/512)];
+
+	if ( dataBlockNO == -1) then
+		flag2 = 1;
+		i= 24;
+		flag =0;
+		while (i<448) do 
+			if([DISK_LIST + i] == 0)  then
+				flag =1;			 					// Freen entry is found at index  i
+				[DISK_LIST + i] = 1; 					//setting the Data Block Entry as 1 in DFL
+				[SCRATCHPAD + (seekPosition/512)] = i;	//Set the Data block Location in Basic block of File			
+
+				[FAT + fatIndex*8 + 1] = [FAT + fatIndex*8 + 1] + 512; //add the extra memory size to the FAT entry
+
+				store(1,[FAT + fatIndex*8 + 2]); 		//store the basic block back to disk
+				store(5,19); 		//store the FAT back to disk
+				store(6,20); 		//store the DFL back to disk
+				break;
+			endif;
+
+			i = i+1;
+		endwhile;
+
+		if(flag == 0) then
+			[physicalSP -2] = -1; //NO Free space in FileSystem
+			print("wriNoFre");
+			ireturn;
+		endif;
+
+	endif;
+
+	if(flag2 == 1) then
+		dataBlockNO = i;
+	endif;
+
+	load(1, dataBlockNO); 		//Fetch datablock from DISK to MEMORY
+
+	[SCRATCHPAD + (seekPosition % 512)] = wordToWrite; // write the word to the OFFSET Pointed Location in Data Block
+
+	if(dataBlockNO >= 24 || dataBlockNO <448) then
+		store (1, dataBlockNO);
+	else
+		print("WriInvStr");
+	endif;
+
+	[currentPCB + 15 + fileDescriptor*2 + 1] = [currentPCB + 15 + fileDescriptor*2 + 1] + 1;
+
+	[physicalSP - 2] = 0; //Success
+	ireturn;
+endif;
+
+if (sysCallNo == 4) then		
+	ireturn;
+endif;
